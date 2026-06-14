@@ -1,11 +1,12 @@
 import { api, assetUrl } from "../api.js";
 import { errorState, list, loading } from "../components.js";
-import { getConfig } from "../config.js";
+import { getConfig, saveConfig } from "../config.js";
 import { installSponsorBlock } from "../sponsorblock.js";
 import { compactNumber, escapeHtml, fullNumber, pickThumbnail, relativeTime, setTitle } from "../utils.js";
 
 const view = () => document.getElementById("view");
 const DASH_JS_URL = "https://cdn.jsdelivr.net/npm/dashjs@4.7.4/dist/dash.all.min.js";
+const PLAYBACK_SPEED_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 let dashScriptPromise;
 let dashPlayer;
 let dashManifestUrl;
@@ -79,6 +80,7 @@ function watchMarkup(video) {
   const streams = chooseStreams(video);
   const selected = streams[0];
   const dashAvailable = hasDashStreams(video);
+  const playerAvailable = dashAvailable || selected || video.hlsUrl;
   const poster = assetUrl(pickThumbnail(video.videoThumbnails, 1280));
   const published = video.publishedText || relativeTime(video.published);
   const related = video.recommendedVideos || video.relatedVideos || [];
@@ -103,9 +105,9 @@ function watchMarkup(video) {
           `}
         </div>
 
-        ${dashAvailable || selected || video.hlsUrl ? playerEnhancements() : ""}
+        ${playerAvailable ? playerEnhancements() : ""}
 
-        ${dashAvailable || streams.length ? streamSelector(video, streams, selected, dashAvailable) : ""}
+        ${playerAvailable ? playbackControls(video, streams, selected, dashAvailable) : ""}
         <p class="player-note" id="player-note"></p>
         <p class="player-note" id="sponsorblock-note"></p>
 
@@ -162,11 +164,20 @@ function authorAvatar(video) {
   return escapeHtml((video.author || "I").slice(0, 1).toUpperCase());
 }
 
+function playbackControls(video, streams, selected, dashAvailable) {
+  return `
+    <div class="player-controls">
+      ${dashAvailable || streams.length ? streamSelector(video, streams, selected, dashAvailable) : ""}
+      ${speedSelector(getConfig().playbackSpeed)}
+    </div>
+  `;
+}
+
 function streamSelector(video, streams, selected, dashAvailable) {
   const dashOptions = dashAvailable ? dashQualityOptions(video) : [];
 
   return `
-    <label class="quality-select">
+    <label class="player-select">
       Quality
       <select id="stream-select" class="select">
         ${dashAvailable ? `<option value="${escapeHtml(api.dashManifest(video.videoId))}" data-mode="dash" selected>Auto DASH</option>` : ""}
@@ -179,6 +190,20 @@ function streamSelector(video, streams, selected, dashAvailable) {
           <option value="${escapeHtml(api.latestVersion(video.videoId, stream.itag))}" data-mode="progressive" data-type="${escapeHtml(stream.type || "")}" ${!dashAvailable && stream.itag === selected?.itag ? "selected" : ""}>
             ${escapeHtml(stream.qualityLabel || stream.resolution || stream.quality || stream.itag)} MP4
           </option>
+        `).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function speedSelector(selectedSpeed) {
+  const rate = normalizePlaybackRate(selectedSpeed);
+  return `
+    <label class="player-select">
+      Speed
+      <select id="speed-select" class="select">
+        ${PLAYBACK_SPEED_OPTIONS.map((option) => `
+          <option value="${option}" ${option === rate ? "selected" : ""}>${escapeHtml(formatPlaybackRate(option))}</option>
         `).join("")}
       </select>
     </label>
@@ -204,11 +229,17 @@ function captionTracks(video) {
 function installWatchInteractions(video) {
   const player = document.getElementById("video-player");
   const selector = document.getElementById("stream-select");
+  const speedControl = document.getElementById("speed-select");
+  const initialPlaybackRate = normalizePlaybackRate(speedControl?.value || getConfig().playbackSpeed);
 
   const selectedOption = selector?.selectedOptions[0];
 
+  if (player) {
+    setPlayerPlaybackRate(player, initialPlaybackRate, speedControl);
+  }
+
   if (player && selectedOption && selectedOption.dataset.mode.startsWith("dash")) {
-    initializeDash(player, selectedOption);
+    initializeDash(player, selectedOption, 0, true, initialPlaybackRate);
   }
 
   if (player) {
@@ -221,15 +252,22 @@ function installWatchInteractions(video) {
     });
   }
 
+  speedControl?.addEventListener("change", (event) => {
+    if (!player) return;
+    const nextRate = setPlayerPlaybackRate(player, event.target.value, event.target);
+    saveConfig({ playbackSpeed: nextRate }, { silent: true });
+  });
+
   document.getElementById("stream-select")?.addEventListener("change", (event) => {
     if (!player) return;
     const currentTime = player.currentTime;
     const paused = player.paused;
+    const playbackRate = normalizePlaybackRate(player.playbackRate || speedControl?.value || getConfig().playbackSpeed);
 
     const option = event.target.selectedOptions[0];
 
     if (option?.dataset.mode?.startsWith("dash")) {
-      initializeDash(player, option, currentTime, paused);
+      initializeDash(player, option, currentTime, paused, playbackRate);
       return;
     }
 
@@ -237,6 +275,7 @@ function installWatchInteractions(video) {
     player.src = event.target.value;
     player.currentTime = currentTime;
     player.load();
+    setPlayerPlaybackRate(player, playbackRate, speedControl);
     if (!paused) player.play().catch(() => {});
   });
 
@@ -248,9 +287,11 @@ function installWatchInteractions(video) {
     if (!next) return;
 
     const currentTime = player.currentTime || 0;
+    const playbackRate = normalizePlaybackRate(player.playbackRate || speedControl?.value || getConfig().playbackSpeed);
     player.src = next.src;
     player.currentTime = currentTime;
     player.load();
+    setPlayerPlaybackRate(player, playbackRate, speedControl);
   }, { once: true });
 }
 
@@ -270,8 +311,9 @@ function loadDashScript() {
   return dashScriptPromise;
 }
 
-async function initializeDash(player, option, currentTime = 0, paused = true) {
+async function initializeDash(player, option, currentTime = 0, paused = true, playbackRate = 1) {
   const note = document.getElementById("player-note");
+  const normalizedPlaybackRate = normalizePlaybackRate(playbackRate);
   try {
     const dashjs = await loadDashScript();
     const manifest = option.value;
@@ -294,9 +336,11 @@ async function initializeDash(player, option, currentTime = 0, paused = true) {
       dashPlayer.initialize(player, manifest, !paused);
       dashPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
         if (currentTime > 0) player.currentTime = currentTime;
+        setPlayerPlaybackRate(player, normalizedPlaybackRate);
         applyDashQuality(requestedQuality);
       });
     } else {
+      setPlayerPlaybackRate(player, normalizedPlaybackRate);
       applyDashQuality(requestedQuality);
       if (!paused) player.play().catch(() => {});
     }
@@ -313,6 +357,7 @@ async function initializeDash(player, option, currentTime = 0, paused = true) {
     if (fallback) {
       player.src = fallback;
       player.load();
+      setPlayerPlaybackRate(player, normalizedPlaybackRate);
     }
   }
 }
@@ -345,6 +390,29 @@ function applyDashQuality(requestedQuality) {
   if (quality) {
     dashPlayer.setQualityFor("video", quality.qualityIndex ?? quality.index, true);
   }
+}
+
+function normalizePlaybackRate(value) {
+  const rate = Number(value);
+  return PLAYBACK_SPEED_OPTIONS.includes(rate) ? rate : 1;
+}
+
+function formatPlaybackRate(rate) {
+  return `${String(rate).replace(/\.0$/, "")}x`;
+}
+
+function setPlayerPlaybackRate(player, rate, control = document.getElementById("speed-select")) {
+  const normalizedRate = normalizePlaybackRate(rate);
+  if (!player) return normalizedRate;
+
+  player.defaultPlaybackRate = normalizedRate;
+  player.playbackRate = normalizedRate;
+
+  if (control) {
+    control.value = String(normalizedRate);
+  }
+
+  return normalizedRate;
 }
 
 async function loadComments(id) {

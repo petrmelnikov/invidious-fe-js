@@ -5,6 +5,7 @@ const defaults = {
   region: "",
   theme: "system",
   quality: "auto",
+  playbackSpeed: 1,
   comments: "youtube",
   sponsorBlock: {
     enabled: false,
@@ -52,7 +53,8 @@ export function getConfig() {
   }
 }
 
-export function saveConfig(nextConfig) {
+export function saveConfig(nextConfig, options = {}) {
+  const { silent = false } = options;
   const current = getConfig();
   const config = mergeConfig({
     ...current,
@@ -70,7 +72,9 @@ export function saveConfig(nextConfig) {
   });
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
   applyTheme(config.theme);
-  window.dispatchEvent(new CustomEvent("configchange", { detail: config }));
+  if (!silent) {
+    window.dispatchEvent(new CustomEvent("configchange", { detail: config }));
+  }
   return config;
 }
 
