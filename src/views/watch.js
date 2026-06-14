@@ -28,7 +28,7 @@ export async function renderWatch({ search }) {
   try {
     const video = await api.video(id);
     setTitle(video.title);
-    view().innerHTML = watchMarkup(video);
+    view().innerHTML = watchMarkup(video, id);
     installWatchInteractions(video);
     loadComments(id);
   } catch (error) {
@@ -76,7 +76,7 @@ function dashQualityOptions(video) {
     .sort((a, b) => b.height - a.height || b.fps - a.fps);
 }
 
-function watchMarkup(video) {
+function watchMarkup(video, videoId) {
   const streams = chooseStreams(video);
   const selected = streams[0];
   const dashAvailable = hasDashStreams(video);
@@ -84,6 +84,7 @@ function watchMarkup(video) {
   const poster = assetUrl(pickThumbnail(video.videoThumbnails, 1280));
   const published = video.publishedText || relativeTime(video.published);
   const related = video.recommendedVideos || video.relatedVideos || [];
+  const youtubeUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 
   return `
     <section class="watch-layout">
@@ -112,12 +113,17 @@ function watchMarkup(video) {
         <p class="player-note" id="sponsorblock-note"></p>
 
         <header class="watch-header">
-          <h1>${escapeHtml(video.title)}</h1>
-          <p class="meta">
-            ${video.viewCount ? `${escapeHtml(fullNumber(video.viewCount))} views` : ""}
-            ${video.viewCount && published ? " · " : ""}
-            ${published ? escapeHtml(published) : ""}
-          </p>
+          <div class="watch-header-copy">
+            <h1>${escapeHtml(video.title)}</h1>
+            <p class="meta">
+              ${video.viewCount ? `${escapeHtml(fullNumber(video.viewCount))} views` : ""}
+              ${video.viewCount && published ? " · " : ""}
+              ${published ? escapeHtml(published) : ""}
+            </p>
+          </div>
+          <div class="watch-header-actions">
+            <a class="button button-ghost" href="${escapeHtml(youtubeUrl)}" target="_blank" rel="noreferrer noopener">Open on YouTube</a>
+          </div>
         </header>
 
         <section class="author-strip">
