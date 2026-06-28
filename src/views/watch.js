@@ -176,6 +176,10 @@ function playbackControls(video, streams, selected, dashAvailable) {
   return `
     <div class="player-controls">
       ${dashAvailable || streams.length ? streamSelector(video, streams, selected, dashAvailable) : ""}
+      <label class="player-select" id="audio-select-container" style="display: none;">
+        Audio
+        <select id="audio-select" class="select"></select>
+      </label>
       ${speedSelector(getConfig().playbackSpeed)}
     </div>
   `;
@@ -222,6 +226,43 @@ function sourceTags(video, streams) {
   return streams.map((stream) => `
     <source src="${escapeHtml(api.latestVersion(video.videoId, stream.itag))}" type="${escapeHtml(stream.type || "")}" data-itag="${escapeHtml(stream.itag)}">
   `);
+}
+
+function getLanguageName(langCode) {
+  try {
+    const displayNames = new Intl.DisplayNames([navigator.language || "en"], { type: "language" });
+    return displayNames.of(langCode) || langCode;
+  } catch {
+    return langCode;
+  }
+}
+
+function formatAudioTrack(track) {
+  let label = getLanguageName(track.lang);
+  if (track.roles && track.roles.length > 0 && !track.roles.includes("main")) {
+    label += ` (${track.roles.join(", ")})`;
+  }
+  return label;
+}
+
+function populateAudioTracks() {
+  if (!dashPlayer) return;
+  const audioTracks = dashPlayer.getTracksFor("audio") || [];
+  const container = document.getElementById("audio-select-container");
+  const selector = document.getElementById("audio-select");
+  if (!container || !selector) return;
+
+  if (audioTracks.length > 1) {
+    const currentTrack = dashPlayer.getCurrentTrackFor("audio");
+    selector.innerHTML = audioTracks.map((track, index) => {
+      const isSelected = currentTrack && (track.id === currentTrack.id || track.index === currentTrack.index);
+      return `<option value="${index}" ${isSelected ? "selected" : ""}>${escapeHtml(formatAudioTrack(track))}</option>`;
+    }).join("");
+    container.style.display = "inline-flex";
+  } else {
+    container.style.display = "none";
+    selector.innerHTML = "";
+  }
 }
 
 function captionTracks(video) {
@@ -300,6 +341,16 @@ function installWatchInteractions(video, search) {
     if (!player) return;
     const nextRate = setPlayerPlaybackRate(player, event.target.value, event.target);
     saveConfig({ playbackSpeed: nextRate }, { silent: true });
+  });
+
+  document.getElementById("audio-select")?.addEventListener("change", (event) => {
+    if (!dashPlayer) return;
+    const index = Number(event.target.value);
+    const audioTracks = dashPlayer.getTracksFor("audio") || [];
+    const track = audioTracks[index];
+    if (track) {
+      dashPlayer.setCurrentTrack(track);
+    }
   });
 
   document.getElementById("stream-select")?.addEventListener("change", (event) => {
@@ -383,6 +434,7 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
         setPlayerPlaybackRate(player, normalizedPlaybackRate);
         applyDashQuality(requestedQuality);
         applyResume();
+        populateAudioTracks();
       });
 
       if (currentTime > 0) {
@@ -398,6 +450,7 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
       setPlayerPlaybackRate(player, normalizedPlaybackRate);
       applyDashQuality(requestedQuality);
       applyResume();
+      populateAudioTracks();
       if (!paused) player.play().catch(() => {});
     }
 
@@ -488,6 +541,15 @@ function destroyDash() {
   dashPlayer.reset();
   dashPlayer = null;
   dashManifestUrl = "";
+
+  const container = document.getElementById("audio-select-container");
+  if (container) {
+    container.style.display = "none";
+  }
+  const selector = document.getElementById("audio-select");
+  if (selector) {
+    selector.innerHTML = "";
+  }
 }
 
 function applyDashQuality(requestedQuality) {
