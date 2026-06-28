@@ -12,6 +12,8 @@ services:
       SPONSORBLOCK_API_ORIGIN: ${SPONSORBLOCK_API_ORIGIN:-https://sponsor.ajay.app}
     ports:
       - "${INVIDIOUS_FE_PORT:-5173}:${PORT:-5173}"
+    volumes:
+      - ./accounts.json:/app/accounts.json
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT:-5173}/ >/dev/null || exit 1"]
       interval: 30s
