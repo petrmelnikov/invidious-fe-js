@@ -117,7 +117,10 @@ async function proxyRequest(req, res, requestUrl) {
     const responseHeaders = {};
     const blockedHeaders = new Set([
       "connection",
+      // fetch() decompresses the body, so the upstream content-encoding and
+      // content-length no longer match what we send downstream.
       "content-encoding",
+      "content-length",
       "content-security-policy",
       "permissions-policy",
       "referrer-policy",

@@ -6,6 +6,7 @@ const baseDefaults = {
   theme: "system",
   quality: "auto",
   playbackSpeed: 1,
+  fullPagePlayer: false,
   comments: "youtube",
   sponsorBlock: {
     enabled: false,

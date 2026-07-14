@@ -87,8 +87,10 @@ function watchMarkup(video, videoId) {
   const related = video.recommendedVideos || video.relatedVideos || [];
   const youtubeUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 
+  const fullPage = Boolean(getConfig().fullPagePlayer);
+
   return `
-    <section class="watch-layout">
+    <section class="watch-layout${fullPage ? " fullpage" : ""}">
       <article class="watch-main">
         <div class="player-frame">
           ${dashAvailable || selected ? `
@@ -173,6 +175,7 @@ function authorAvatar(video) {
 }
 
 function playbackControls(video, streams, selected, dashAvailable) {
+  const fullPage = Boolean(getConfig().fullPagePlayer);
   return `
     <div class="player-controls">
       ${dashAvailable || streams.length ? streamSelector(video, streams, selected, dashAvailable) : ""}
@@ -181,6 +184,9 @@ function playbackControls(video, streams, selected, dashAvailable) {
         <select id="audio-select" class="select"></select>
       </label>
       ${speedSelector(getConfig().playbackSpeed)}
+      <button class="button button-ghost fullpage-toggle" type="button" id="fullpage-toggle" aria-pressed="${fullPage}">
+        ${fullPage ? "Exit full page" : "Full page"}
+      </button>
     </div>
   `;
 }
@@ -336,6 +342,17 @@ function installWatchInteractions(video, search) {
       skipButton: document.getElementById("sponsorblock-skip")
     });
   }
+
+  const fullpageToggle = document.getElementById("fullpage-toggle");
+  fullpageToggle?.addEventListener("click", () => {
+    const layout = document.querySelector(".watch-layout");
+    if (!layout) return;
+    const enabled = layout.classList.toggle("fullpage");
+    fullpageToggle.textContent = enabled ? "Exit full page" : "Full page";
+    fullpageToggle.setAttribute("aria-pressed", String(enabled));
+    saveConfig({ fullPagePlayer: enabled }, { silent: true });
+    player?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
 
   speedControl?.addEventListener("change", (event) => {
     if (!player) return;

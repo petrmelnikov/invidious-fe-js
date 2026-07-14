@@ -343,6 +343,35 @@ video {
   margin: 4px 0 0;
 }
 
+.notice {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.progress-card {
+  grid-template-columns: minmax(160px, 240px) 1fr auto;
+}
+
+.card-remove {
+  align-self: start;
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.card-remove:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .state {
   display: grid;
   min-height: 320px;
@@ -436,6 +465,31 @@ video {
   flex-wrap: wrap;
   align-items: end;
   margin: 14px 0 0;
+}
+
+.fullpage-toggle {
+  margin-left: auto;
+}
+
+.watch-layout.fullpage {
+  grid-template-columns: 1fr;
+}
+
+.watch-layout.fullpage .watch-side {
+  position: static;
+}
+
+.view:has(.watch-layout.fullpage) {
+  width: 100%;
+}
+
+.watch-layout.fullpage .player-frame video,
+.watch-layout.fullpage .player-frame img {
+  aspect-ratio: auto;
+  width: 100%;
+  height: calc(100vh - 132px);
+  min-height: 240px;
+  object-fit: contain;
 }
 
 .player-select {

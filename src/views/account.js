@@ -1,4 +1,4 @@
-import { clearAccountProgress, getCurrentAccount, listVideoProgress, signIn, signOut } from "../account.js";
+import { clearAccountProgress, clearVideoProgress, getCurrentAccount, listVideoProgress, signIn, signOut } from "../account.js";
 import { emptyState, pageHeader } from "../components.js";
 import { escapeHtml, relativeTime, secondsToDuration, setTitle } from "../utils.js";
 
@@ -72,6 +72,15 @@ export function renderAccount() {
     clearAccountProgress();
     renderAccount();
   });
+
+  view().querySelectorAll("[data-remove-progress]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const title = button.dataset.removeTitle || "this video";
+      if (!window.confirm(`Remove "${title}" from saved progress?`)) return;
+      clearVideoProgress(button.dataset.removeProgress);
+      renderAccount();
+    });
+  });
 }
 
 function progressCard(entry) {
@@ -82,7 +91,7 @@ function progressCard(entry) {
   const updatedAt = relativeTime(Math.floor(Number(entry.updatedAt || 0) / 1000));
 
   return `
-    <article class="video-card video-card-compact">
+    <article class="video-card video-card-compact progress-card">
       <a class="thumb" href="${href}" data-link aria-label="${escapeHtml(title)}">
         ${entry.thumbnail ? `<img src="${escapeHtml(entry.thumbnail)}" alt="" loading="lazy">` : '<span class="thumb-fallback">Resume</span>'}
         <span class="duration">${escapeHtml(duration ? `${resumeAt} / ${duration}` : resumeAt)}</span>
@@ -93,6 +102,11 @@ function progressCard(entry) {
         ${entry.author ? `<p class="meta">${escapeHtml(entry.author)}</p>` : ""}
         <p class="meta">Resume at ${escapeHtml(resumeAt)}${updatedAt ? ` · Updated ${escapeHtml(updatedAt)}` : ""}</p>
       </div>
+
+      <button class="button button-ghost card-remove" type="button"
+        data-remove-progress="${escapeHtml(entry.videoId)}"
+        data-remove-title="${escapeHtml(title)}"
+        title="Remove from saved progress" aria-label="Remove ${escapeHtml(title)} from saved progress">✕</button>
     </article>
   `;
 }

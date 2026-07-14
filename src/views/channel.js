@@ -24,7 +24,7 @@ export async function renderChannel({ params, search }) {
   try {
     const channel = await api.channel(ucid);
     setTitle(channel.author || channel.title || "Channel");
-    const content = tab === "home" ? channelHome(channel) : await channelTab(ucid, tab, q);
+    const content = tab === "home" ? await channelHome(ucid, channel) : await channelTab(ucid, tab, q);
 
     view().innerHTML = `
       ${channelHeader(channel)}
@@ -58,13 +58,14 @@ function channelHeader(channel) {
   `;
 }
 
-function channelHome(channel) {
-  const latest = channel.latestVideos || channel.videos || [];
-  const related = channel.relatedChannels || [];
+async function channelHome(ucid, channel) {
+  const { items, note } = await videosWithFallback(ucid, channel.latestVideos || channel.videos || []);
+  const related = usableItems(channel.relatedChannels);
   return `
     <section class="section">
       <div class="section-heading"><h2>Latest videos</h2></div>
-      ${grid(latest)}
+      ${note}
+      ${grid(items)}
     </section>
     ${related.length ? `
       <section class="section">
@@ -79,13 +80,86 @@ async function channelTab(ucid, tab, q) {
   const allowed = new Set(["latest", "videos", "shorts", "streams", "podcasts", "releases", "courses", "playlists", "community", "channels"]);
   if (tab === "videos" && q) {
     const results = await api.channelSearch(ucid, q);
-    return list(results);
+    return list(usableItems(results));
   }
-  if (!allowed.has(tab)) return channelHome(await api.channel(ucid));
+  if (!allowed.has(tab)) return channelHome(ucid, await api.channel(ucid));
   const payload = await api.channelTab(ucid, tab);
-  const items = payload.videos || payload.playlists || payload.channels || payload.posts || payload.contents || payload;
-  if (tab === "community") return communityList(items);
-  return tab === "channels" ? `<section class="list">${items.map(channelCard).join("")}</section>` : grid(Array.isArray(items) ? items : []);
+  const raw = payload.videos || payload.playlists || payload.channels || payload.posts || payload.contents || payload;
+  if (tab === "community") return communityList(raw);
+  if (tab === "channels") return `<section class="list">${usableItems(raw).map(channelCard).join("")}</section>`;
+  if (tab === "latest" || tab === "videos") {
+    const { items, note } = await videosWithFallback(ucid, raw);
+    return `${note}${grid(items)}`;
+  }
+  const items = usableItems(raw);
+  const note = hasParseErrors(raw) && !items.length ? parserErrorNote() : "";
+  return `${note}${grid(items)}`;
+}
+
+function usableItems(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => item && item.type !== "parse-error");
+}
+
+function hasParseErrors(items) {
+  return Array.isArray(items) && items.some((item) => item?.type === "parse-error");
+}
+
+function parserErrorNote(suffix = "") {
+  return `<p class="notice">The backend could not parse this channel's content (the Invidious extractor is out of date with YouTube).${suffix}</p>`;
+}
+
+// The Invidious channel-video extractor breaks whenever YouTube changes its
+// markup; the channel RSS feed keeps working, so use it as a fallback source.
+async function videosWithFallback(ucid, rawItems) {
+  const items = usableItems(rawItems);
+  if (items.length || !hasParseErrors(rawItems)) return { items, note: "" };
+
+  try {
+    const rssItems = await fetchChannelRss(ucid);
+    return {
+      items: rssItems,
+      note: parserErrorNote(" Showing the latest uploads from the channel's RSS feed instead.")
+    };
+  } catch {
+    return { items: [], note: parserErrorNote(" The RSS feed fallback also failed.") };
+  }
+}
+
+async function fetchChannelRss(ucid) {
+  const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(ucid)}`;
+  const response = await fetch(`/proxy?url=${encodeURIComponent(feedUrl)}`, { cache: "no-cache" });
+  if (!response.ok) throw new Error(`RSS feed request failed (${response.status})`);
+
+  const xml = new DOMParser().parseFromString(await response.text(), "text/xml");
+  if (xml.querySelector("parsererror")) throw new Error("Could not parse RSS feed");
+
+  return [...xml.getElementsByTagName("entry")]
+    .map((entry) => rssEntryToVideo(entry, ucid))
+    .filter((video) => video.videoId);
+}
+
+function rssEntryToVideo(entry, ucid) {
+  const text = (tag) => entry.getElementsByTagNameNS("*", tag)[0]?.textContent?.trim() || "";
+  const videoId = text("videoId");
+  const thumbnail = entry.getElementsByTagNameNS("*", "thumbnail")[0];
+  const statistics = entry.getElementsByTagNameNS("*", "statistics")[0];
+  const publishedMs = Date.parse(text("published"));
+  const views = Number(statistics?.getAttribute("views") || 0);
+
+  return {
+    type: "video",
+    videoId,
+    title: text("title"),
+    author: text("name"),
+    authorId: ucid,
+    published: Number.isFinite(publishedMs) ? Math.floor(publishedMs / 1000) : 0,
+    viewCount: views > 0 ? views : undefined,
+    videoThumbnails: [{
+      url: thumbnail?.getAttribute("url") || `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`,
+      width: Number(thumbnail?.getAttribute("width") || 320),
+      height: Number(thumbnail?.getAttribute("height") || 180)
+    }]
+  };
 }
 
 function channelSearchForm(ucid, q) {
