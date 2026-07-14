@@ -14,8 +14,33 @@ function show_help() {
   echo "  init    - Initialize production environment (create data folders)"
   echo "  start   - Start the application in detached mode"
   echo "  stop    - Stop the application"
+  echo "  build   - Rebuild the docker image"
   echo "  update  - Pull latest changes, rebuild and restart"
   echo "  help    - Show this help message"
+  echo ""
+  echo "Run without sudo: git uses your own keys, and docker is invoked"
+  echo "through sudo automatically when the daemon is not accessible."
+}
+
+# Run git as the invoking user even under sudo, so their SSH keys and
+# git config are used instead of root's.
+function run_git() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    sudo -u "$SUDO_USER" -H git "$@"
+  else
+    git "$@"
+  fi
+}
+
+# Run docker compose, prefixing with sudo only when the current user
+# cannot reach the docker daemon.
+function compose() {
+  if docker info > /dev/null 2>&1; then
+    docker compose -f "$COMPOSE_FILE" "$@"
+  else
+    echo "[prod] Docker daemon not accessible, using sudo..."
+    sudo docker compose -f "$COMPOSE_FILE" "$@"
+  fi
 }
 
 function do_init() {
@@ -49,33 +74,38 @@ function do_init() {
 
 function do_start() {
   echo "[prod] Starting application..."
-  docker compose -f "$COMPOSE_FILE" up -d
+  compose up -d
   echo "[prod] Application started."
 }
 
 function do_stop() {
   echo "[prod] Stopping application..."
-  docker compose -f "$COMPOSE_FILE" down
+  compose down
   echo "[prod] Application stopped."
+}
+
+function do_build() {
+  echo "[prod] Rebuilding docker image..."
+  compose build
+  echo "[prod] Build complete."
 }
 
 function do_update() {
   echo "[prod] Updating application..."
-  
+
   # Pull latest changes if it's a git repository
-  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  if run_git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
     echo "[prod] Pulling latest changes from git..."
-    git pull
+    run_git pull
   else
     echo "[prod] Not a git repository, skipping git pull."
   fi
-  
-  echo "[prod] Rebuilding docker image..."
-  docker compose -f "$COMPOSE_FILE" build
-  
+
+  do_build
+
   echo "[prod] Restarting application..."
-  docker compose -f "$COMPOSE_FILE" up -d
-  
+  compose up -d
+
   echo "[prod] Update complete. Unused images can be cleaned with 'docker image prune -f'."
 }
 
@@ -89,8 +119,14 @@ case "$1" in
   stop)
     do_stop
     ;;
+  build)
+    do_build
+    ;;
   update)
     do_update
+    ;;
+  help)
+    show_help
     ;;
   *)
     show_help
