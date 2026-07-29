@@ -1,8 +1,10 @@
 import { clearVideoProgress, getCurrentAccount, getVideoProgress, saveVideoProgress } from "../account.js";
 import { api, assetUrl } from "../api.js";
+import { parseChapters } from "../chapters.js";
 import { errorState, list, loading } from "../components.js";
 import { getConfig, saveConfig } from "../config.js";
 import { installSponsorBlock } from "../sponsorblock.js";
+import { installTimeline } from "../timeline.js";
 import { compactNumber, escapeHtml, fullNumber, parseYoutubeTime, pickThumbnail, relativeTime, secondsToDuration, setTitle } from "../utils.js";
 
 const view = () => document.getElementById("view");
@@ -162,7 +164,12 @@ function watchMarkup(video, videoId) {
 function playerEnhancements() {
   return `
     <div class="player-enhancements">
-      <button class="sponsorblock-timeline" id="sponsorblock-timeline" type="button" aria-label="Seek video timeline" hidden></button>
+      <div class="timeline-shell">
+        <button class="player-timeline" id="player-timeline" type="button" role="slider"
+          aria-label="Seek video timeline" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></button>
+        <span class="timeline-tooltip" id="timeline-tooltip" hidden></span>
+      </div>
+      <p class="timeline-chapter" id="timeline-chapter" hidden></p>
       <button class="button sponsorblock-skip" type="button" id="sponsorblock-skip" hidden>Skip segment</button>
     </div>
   `;
@@ -334,12 +341,20 @@ function installWatchInteractions(video, search) {
   }
 
   if (player) {
+    const timeline = installTimeline({
+      player,
+      element: document.getElementById("player-timeline"),
+      tooltipElement: document.getElementById("timeline-tooltip"),
+      labelElement: document.getElementById("timeline-chapter")
+    });
+    timeline.setChapters(parseChapters(video));
+
     installSponsorBlock({
       player,
       videoId: video.videoId,
       noteElement: document.getElementById("sponsorblock-note"),
-      markerElement: document.getElementById("sponsorblock-timeline"),
-      skipButton: document.getElementById("sponsorblock-skip")
+      skipButton: document.getElementById("sponsorblock-skip"),
+      timeline
     });
   }
 

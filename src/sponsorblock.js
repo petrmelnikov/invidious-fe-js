@@ -29,12 +29,12 @@ export function getSponsorBlockSettings(config = getConfig()) {
   };
 }
 
-export function installSponsorBlock({ player, videoId, noteElement, markerElement, skipButton }) {
+export function installSponsorBlock({ player, videoId, noteElement, skipButton, timeline }) {
   setNote(noteElement, "");
-  renderTimelineMarkers(markerElement, [], 0, false);
+  timeline?.setSegments([]);
   updateSkipButton(skipButton, null);
 
-  if (!player || !videoId) return () => {};
+  if (!player || !videoId || !timeline) return () => {};
 
   const settings = getSponsorBlockSettings();
   const categoryModes = settings.categories;
@@ -46,13 +46,10 @@ export function installSponsorBlock({ player, videoId, noteElement, markerElemen
 
   let destroyed = false;
   let segments = [];
-  let animationFrame = 0;
 
-  const handlePlaybackState = () => {
+  const handlePlaybackState = (currentTime) => {
     if (destroyed || !player.isConnected) return;
 
-    const currentTime = Number(player.currentTime || 0);
-    updateTimelineProgress(markerElement, currentTime, Number(player.duration || 0));
     clearSkipGuards(segments, currentTime);
 
     const segment = findCurrentSegment(segments, currentTime, (entry) => !entry.autoSkip);
@@ -80,55 +77,7 @@ export function installSponsorBlock({ player, videoId, noteElement, markerElemen
     return true;
   };
 
-  const startPlaybackLoop = () => {
-    if (animationFrame || destroyed) return;
-
-    const tick = () => {
-      animationFrame = 0;
-      handlePlaybackState();
-
-      if (!destroyed && player.isConnected && !player.paused && !player.ended) {
-        animationFrame = requestAnimationFrame(tick);
-      }
-    };
-
-    animationFrame = requestAnimationFrame(tick);
-  };
-
-  const stopPlaybackLoop = () => {
-    if (!animationFrame) return;
-    cancelAnimationFrame(animationFrame);
-    animationFrame = 0;
-  };
-
-  const refreshMarkers = () => {
-    if (destroyed || !player.isConnected) return;
-    renderTimelineMarkers(markerElement, segments, Number(player.duration || 0), settings.showMarkers);
-    updateTimelineProgress(markerElement, Number(player.currentTime || 0), Number(player.duration || 0));
-  };
-
-  const seekFromTimeline = (event) => {
-    if (destroyed || !player.isConnected || !markerElement || markerElement.hidden) return;
-
-    const duration = Number(player.duration || 0);
-    if (!Number.isFinite(duration) || duration <= 0) return;
-
-    const rect = markerElement.getBoundingClientRect();
-    if (!rect.width) return;
-
-    const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
-    player.currentTime = ratio * duration;
-    handlePlaybackState();
-  };
-
-  player.addEventListener("timeupdate", handlePlaybackState);
-  player.addEventListener("playing", startPlaybackLoop);
-  player.addEventListener("pause", stopPlaybackLoop);
-  player.addEventListener("ended", stopPlaybackLoop);
-  player.addEventListener("seeked", handlePlaybackState);
-  player.addEventListener("loadedmetadata", refreshMarkers);
-  player.addEventListener("durationchange", refreshMarkers);
-  markerElement?.addEventListener("click", seekFromTimeline);
+  const unsubscribe = timeline.onTick(handlePlaybackState);
   skipButton?.addEventListener("click", skipCurrentSegment);
 
   void loadSponsorSegments(videoId, settings, requestedCategories)
@@ -136,9 +85,8 @@ export function installSponsorBlock({ player, videoId, noteElement, markerElemen
       if (destroyed || !player.isConnected) return;
 
       segments = loadedSegments;
-      refreshMarkers();
-      handlePlaybackState();
-      startPlaybackLoop();
+      timeline.setSegments(timelineSegments(segments), settings.showMarkers);
+      handlePlaybackState(Number(player.currentTime || 0));
 
       if (!segments.length) return;
 
@@ -158,18 +106,19 @@ export function installSponsorBlock({ player, videoId, noteElement, markerElemen
 
   return () => {
     destroyed = true;
-    stopPlaybackLoop();
-    renderTimelineMarkers(markerElement, [], 0, false);
-    player.removeEventListener("timeupdate", handlePlaybackState);
-    player.removeEventListener("playing", startPlaybackLoop);
-    player.removeEventListener("pause", stopPlaybackLoop);
-    player.removeEventListener("ended", stopPlaybackLoop);
-    player.removeEventListener("seeked", handlePlaybackState);
-    player.removeEventListener("loadedmetadata", refreshMarkers);
-    player.removeEventListener("durationchange", refreshMarkers);
-    markerElement?.removeEventListener("click", seekFromTimeline);
+    unsubscribe();
+    timeline.setSegments([]);
     skipButton?.removeEventListener("click", skipCurrentSegment);
   };
+}
+
+function timelineSegments(segments) {
+  return segments.map((segment) => ({
+    start: segment.start,
+    end: segment.end,
+    color: colorForCategory(segment.category),
+    label: labelForCategory(segment.category)
+  }));
 }
 
 async function loadSponsorSegments(videoId, settings, categories) {
@@ -274,41 +223,6 @@ function clearSkipGuards(segments, currentTime) {
   }
 }
 
-function renderTimelineMarkers(element, segments, duration, visible) {
-  if (!element) return;
-
-  element.replaceChildren();
-
-  if (!visible || !segments.length || !Number.isFinite(duration) || duration <= 0) {
-    element.hidden = true;
-    element.style.removeProperty("--playback-progress");
-    return;
-  }
-
-  for (const segment of segments) {
-    const left = clamp((segment.start / duration) * 100, 0, 100);
-    const right = clamp((segment.end / duration) * 100, left, 100);
-    const marker = document.createElement("span");
-    marker.className = "sponsorblock-marker";
-    marker.style.left = `${left}%`;
-    marker.style.width = `${Math.max(right - left, 0.2)}%`;
-    marker.style.backgroundColor = colorForCategory(segment.category);
-    marker.title = labelForCategory(segment.category);
-    element.append(marker);
-  }
-
-  element.hidden = false;
-}
-
-function updateTimelineProgress(element, currentTime, duration) {
-  if (!element || element.hidden) return;
-
-  const progress = Number.isFinite(currentTime) && Number.isFinite(duration) && duration > 0
-    ? clamp((currentTime / duration) * 100, 0, 100)
-    : 0;
-  element.style.setProperty("--playback-progress", `${progress.toFixed(4)}%`);
-}
-
 function updateSkipButton(button, segment) {
   if (!button) return;
   button.hidden = !segment;
@@ -326,8 +240,4 @@ function colorForCategory(category) {
 
 function labelForCategory(category) {
   return sponsorBlockCategoryOptions.find((option) => option.id === category)?.label || "segment";
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
 }
