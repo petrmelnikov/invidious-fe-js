@@ -1,7 +1,10 @@
 const ACCOUNTS_KEY = "invidious-fe:accounts";
 const CURRENT_ACCOUNT_KEY = "invidious-fe:account";
+const PENDING_OPS_KEY = "invidious-fe:account-pending";
 const PROGRESS_SAVE_THRESHOLD = 3;
 const PROGRESS_COMPLETE_THRESHOLD = 5;
+const FLUSH_DELAY = 400;
+const FLUSH_RETRY_DELAY = 5000;
 
 function readJson(key, fallback) {
   try {
@@ -54,6 +57,132 @@ function normalizeAccount(account = {}, fallbackName = "") {
 }
 
 let cachedAccount = null;
+let flushChain = Promise.resolve();
+let flushTimer = 0;
+let retryTimer = 0;
+let opCounter = 0;
+
+// Every change is queued as a single operation (upsert / remove / clear) and merged by the
+// backend, instead of uploading the whole progress map. Uploading the map made two requests
+// race: whichever one happened to arrive last won, so a slightly older map silently rolled
+// the history back, and a request lost on page navigation dropped the video for good.
+
+function readPendingOps(key) {
+  const queue = readJson(PENDING_OPS_KEY, {});
+  const ops = Array.isArray(queue[key]) ? queue[key] : [];
+  return ops.filter((op) => op && typeof op === "object" && typeof op.type === "string");
+}
+
+function writePendingOps(key, ops) {
+  const queue = readJson(PENDING_OPS_KEY, {});
+  if (ops.length) queue[key] = ops;
+  else delete queue[key];
+  writeJson(PENDING_OPS_KEY, queue);
+}
+
+function queueOp(key, op) {
+  // A clear supersedes everything queued before it, and a newer change for one video
+  // supersedes the pending change for that same video.
+  const pending = op.type === "clear"
+    ? []
+    : readPendingOps(key).filter((queued) => queued.videoId !== op.videoId);
+
+  pending.push({ ...op, id: `${Date.now()}-${++opCounter}` });
+  writePendingOps(key, pending);
+  scheduleFlush(key);
+}
+
+function applyOps(progress, ops) {
+  let merged = { ...progress };
+
+  for (const op of ops) {
+    if (op.type === "clear") {
+      merged = {};
+    } else if (op.type === "remove" && op.videoId) {
+      delete merged[op.videoId];
+    } else if (op.type === "upsert" && op.entry?.videoId) {
+      const entry = normalizeProgressEntry(op.entry.videoId, op.entry);
+      const existing = merged[entry.videoId];
+      if (!existing || Number(existing.updatedAt || 0) <= entry.updatedAt) {
+        merged[entry.videoId] = entry;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function accountNameFor(key) {
+  if (cachedAccount && accountKey(cachedAccount.name) === key) return cachedAccount.name;
+  const backup = readJson(ACCOUNTS_KEY, {});
+  return normalizeName(backup[key]?.name) || key;
+}
+
+function scheduleFlush(key, delay = FLUSH_DELAY) {
+  if (flushTimer) return;
+  flushTimer = window.setTimeout(() => {
+    flushTimer = 0;
+    flushPendingOps(key);
+  }, delay);
+}
+
+function scheduleRetry(key) {
+  if (retryTimer) return;
+  retryTimer = window.setTimeout(() => {
+    retryTimer = 0;
+    flushPendingOps(key);
+  }, FLUSH_RETRY_DELAY);
+}
+
+// Requests are chained so only one is ever in flight: the backend applies operations in the
+// order they were made, and nothing can arrive out of order.
+function flushPendingOps(key, { keepalive = false } = {}) {
+  flushChain = flushChain
+    .then(() => sendPendingOps(key, keepalive))
+    .catch((err) => {
+      console.error("Failed to save progress to backend, keeping it queued:", err);
+      scheduleRetry(key);
+    });
+  return flushChain;
+}
+
+async function sendPendingOps(key, keepalive) {
+  const ops = readPendingOps(key);
+  if (!ops.length) return;
+
+  const response = await fetch(`/api/custom-accounts?name=${encodeURIComponent(accountNameFor(key))}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ ops }),
+    keepalive
+  });
+
+  if (!response.ok) {
+    throw new Error(`Backend refused the update (HTTP ${response.status})`);
+  }
+
+  // Drop only what this request carried: more changes may have queued up while it was in flight.
+  const sent = new Set(ops.map((op) => op.id));
+  writePendingOps(key, readPendingOps(key).filter((op) => !sent.has(op.id)));
+}
+
+function flushOnHide() {
+  const key = getCurrentAccountKey();
+  if (!key || !readPendingOps(key).length) return;
+
+  if (flushTimer) {
+    window.clearTimeout(flushTimer);
+    flushTimer = 0;
+  }
+  flushPendingOps(key, { keepalive: true });
+}
+
+window.addEventListener("pagehide", flushOnHide);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushOnHide();
+});
 
 export async function initAccount(name) {
   const normalized = normalizeName(name);
@@ -63,66 +192,50 @@ export async function initAccount(name) {
     return null;
   }
 
+  let account = null;
+
   try {
     const response = await fetch(`/api/custom-accounts?name=${encodeURIComponent(normalized)}`);
     if (response.ok) {
       const data = await response.json();
-      if (data && typeof data === "object") {
-        cachedAccount = normalizeAccount(data, normalized);
-        writeJson(ACCOUNTS_KEY, { [key]: cachedAccount });
-        return cachedAccount;
-      }
+      if (data && typeof data === "object") account = normalizeAccount(data, normalized);
+    } else {
+      console.warn(`Backend returned HTTP ${response.status} for the account, using local backup.`);
     }
   } catch (err) {
     console.warn("Failed to fetch account from backend, using local backup:", err);
   }
 
-  const backup = readJson(ACCOUNTS_KEY, {});
-  if (backup[key]) {
-    cachedAccount = normalizeAccount(backup[key], normalized);
-  } else {
-    cachedAccount = { name: normalized, progress: {} };
+  if (!account) {
+    const backup = readJson(ACCOUNTS_KEY, {});
+    account = backup[key] ? normalizeAccount(backup[key], normalized) : { name: normalized, progress: {} };
   }
+
+  // Changes that never reached the backend are still queued, so replay them on top of the
+  // server state instead of letting the download discard them.
+  account.progress = applyOps(account.progress, readPendingOps(key));
+  cachedAccount = account;
+  writeJson(ACCOUNTS_KEY, { [key]: cachedAccount });
+  scheduleFlush(key);
   return cachedAccount;
 }
 
-function loadAccounts() {
-  if (cachedAccount) {
-    const key = accountKey(cachedAccount.name);
-    return { [key]: cachedAccount };
+function loadAccount(key) {
+  if (cachedAccount && accountKey(cachedAccount.name) === key) return cachedAccount;
+
+  const backup = readJson(ACCOUNTS_KEY, {});
+  if (backup[key]) {
+    cachedAccount = normalizeAccount(backup[key], key);
+    cachedAccount.progress = applyOps(cachedAccount.progress, readPendingOps(key));
+    return cachedAccount;
   }
 
-  const key = getCurrentAccountKey();
-  if (key) {
-    const backup = readJson(ACCOUNTS_KEY, {});
-    if (backup[key]) {
-      cachedAccount = normalizeAccount(backup[key], key);
-      return { [key]: cachedAccount };
-    }
-  }
-
-  return {};
+  return null;
 }
 
-function saveAccounts(accounts) {
-  const key = getCurrentAccountKey();
-  if (!key) return;
-
-  const account = accounts[key];
-  if (!account) return;
-
+function commitLocalAccount(key, account) {
   cachedAccount = account;
-  writeJson(ACCOUNTS_KEY, { [key]: cachedAccount });
-
-  fetch(`/api/custom-accounts?name=${encodeURIComponent(account.name)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ progress: account.progress })
-  }).catch((err) => {
-    console.error("Failed to save accounts to backend:", err);
-  });
+  writeJson(ACCOUNTS_KEY, { [key]: account });
 }
 
 export function getCurrentAccountKey() {
@@ -143,8 +256,7 @@ export function getCurrentAccount() {
   const key = getCurrentAccountKey();
   if (!key) return null;
 
-  const accounts = loadAccounts();
-  const account = accounts[key];
+  const account = loadAccount(key);
   if (!account?.name) return null;
 
   return {
@@ -166,6 +278,9 @@ export async function signIn(name) {
 }
 
 export function signOut() {
+  const key = getCurrentAccountKey();
+  if (key) flushPendingOps(key);
+
   localStorage.removeItem(CURRENT_ACCOUNT_KEY);
   cachedAccount = null;
   return dispatchAccountChange();
@@ -190,18 +305,23 @@ export function saveVideoProgress(entry = {}) {
   const videoId = String(entry.videoId || "");
   if (!key || !videoId) return false;
 
-  const accounts = loadAccounts();
-  const account = normalizeAccount(accounts[key], key);
-  const progressEntry = normalizeProgressEntry(videoId, entry);
+  const account = normalizeAccount(loadAccount(key) || { name: key }, key);
+  const progressEntry = normalizeProgressEntry(videoId, { ...entry, updatedAt: Date.now() });
+  const finished = progressEntry.duration > 0
+    && progressEntry.currentTime >= Math.max(progressEntry.duration - PROGRESS_COMPLETE_THRESHOLD, PROGRESS_SAVE_THRESHOLD);
 
-  if (progressEntry.duration > 0 && progressEntry.currentTime >= Math.max(progressEntry.duration - PROGRESS_COMPLETE_THRESHOLD, PROGRESS_SAVE_THRESHOLD)) {
-    delete account.progress[videoId];
+  if (finished) {
+    if (account.progress[videoId]) {
+      delete account.progress[videoId];
+      commitLocalAccount(key, account);
+      queueOp(key, { type: "remove", videoId });
+    }
   } else if (progressEntry.currentTime >= PROGRESS_SAVE_THRESHOLD) {
     account.progress[videoId] = progressEntry;
+    commitLocalAccount(key, account);
+    queueOp(key, { type: "upsert", videoId, entry: progressEntry });
   }
 
-  accounts[key] = account;
-  saveAccounts(accounts);
   dispatchProgressChange({ account: account.name, videoId, progress: account.progress[videoId] || null });
   return true;
 }
@@ -210,13 +330,12 @@ export function clearVideoProgress(videoId) {
   const key = getCurrentAccountKey();
   if (!key || !videoId) return false;
 
-  const accounts = loadAccounts();
-  const account = normalizeAccount(accounts[key], key);
+  const account = normalizeAccount(loadAccount(key) || { name: key }, key);
   if (!account.progress[videoId]) return false;
 
   delete account.progress[videoId];
-  accounts[key] = account;
-  saveAccounts(accounts);
+  commitLocalAccount(key, account);
+  queueOp(key, { type: "remove", videoId });
   dispatchProgressChange({ account: account.name, videoId, progress: null });
   return true;
 }
@@ -225,11 +344,10 @@ export function clearAccountProgress() {
   const key = getCurrentAccountKey();
   if (!key) return false;
 
-  const accounts = loadAccounts();
-  const account = normalizeAccount(accounts[key], key);
+  const account = normalizeAccount(loadAccount(key) || { name: key }, key);
   account.progress = {};
-  accounts[key] = account;
-  saveAccounts(accounts);
+  commitLocalAccount(key, account);
+  queueOp(key, { type: "clear" });
   dispatchProgressChange({ account: account.name, videoId: null, progress: null });
   return true;
 }

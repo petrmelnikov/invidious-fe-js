@@ -716,6 +716,8 @@ function installAccountProgress({ player, video, noteElement, initialTime = 0, a
   }
 
   const persistProgress = (force = false) => {
+    if (!player.isConnected) return;
+
     const currentTime = Number(player.currentTime || 0);
     if (!Number.isFinite(currentTime)) return;
     if (!force && currentTime < 3) return;
@@ -738,6 +740,28 @@ function installAccountProgress({ player, video, noteElement, initialTime = 0, a
     clearVideoProgress(video.videoId);
     if (noteElement) noteElement.textContent = `Finished for ${account.name}.`;
   });
+
+  // Leaving the page (closing the tab, opening another video from outside the app) fires
+  // neither pause nor timeupdate, so save the last position while the player still exists.
+  const stopHideListeners = () => {
+    window.removeEventListener("pagehide", handlePageHide);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+  };
+
+  const handlePageHide = () => {
+    if (!player.isConnected) {
+      stopHideListeners();
+      return;
+    }
+    persistProgress(true);
+  };
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "hidden") handlePageHide();
+  };
+
+  window.addEventListener("pagehide", handlePageHide);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 }
 
 async function loadComments(id) {

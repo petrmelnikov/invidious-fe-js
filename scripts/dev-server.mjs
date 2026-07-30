@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createReadStream, existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, statSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -206,24 +206,80 @@ function accountKey(name) {
   return normalizeName(name).toLowerCase();
 }
 
+// Never swallow a read error: returning an empty database here would make the next write
+// replace every stored account with whatever the requesting client happens to know.
 function readAccountsDb() {
-  try {
-    if (existsSync(ACCOUNTS_FILE)) {
-      const content = readFileSync(ACCOUNTS_FILE, "utf8");
-      return JSON.parse(content || "{}");
-    }
-  } catch (err) {
-    console.error("Error reading accounts file:", err);
-  }
-  return {};
+  if (!existsSync(ACCOUNTS_FILE)) return {};
+
+  const content = readFileSync(ACCOUNTS_FILE, "utf8");
+  const parsed = JSON.parse(content || "{}");
+  return parsed && typeof parsed === "object" ? parsed : {};
 }
 
+// Write to a sibling file first so a failed or partial write cannot corrupt the database.
 function writeAccountsDb(db) {
-  try {
-    writeFileSync(ACCOUNTS_FILE, JSON.stringify(db, null, 2), "utf8");
-  } catch (err) {
-    console.error("Error writing accounts file:", err);
+  const tempFile = `${ACCOUNTS_FILE}.tmp`;
+  writeFileSync(tempFile, JSON.stringify(db, null, 2), "utf8");
+  renameSync(tempFile, ACCOUNTS_FILE);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    // Decode once at the end: concatenating chunks as strings corrupts multi-byte
+    // characters that straddle a chunk boundary.
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+function normalizeProgressEntry(videoId, entry = {}) {
+  return {
+    videoId,
+    title: String(entry.title || ""),
+    author: String(entry.author || ""),
+    thumbnail: String(entry.thumbnail || ""),
+    currentTime: Math.max(0, Number(entry.currentTime) || 0),
+    duration: Math.max(0, Number(entry.duration) || 0),
+    updatedAt: Number(entry.updatedAt) || Date.now()
+  };
+}
+
+function upsertProgressEntry(progress, rawEntry) {
+  const videoId = String(rawEntry?.videoId || "");
+  if (!videoId) return;
+
+  const entry = normalizeProgressEntry(videoId, rawEntry);
+  const existing = progress[videoId];
+  // A late request must not undo a newer position for the same video.
+  if (existing && Number(existing.updatedAt || 0) > entry.updatedAt) return;
+  progress[videoId] = entry;
+}
+
+// Operations are merged into the stored progress, so a client only ever describes the change
+// it made instead of overwriting the whole history with its own copy of it.
+function applyProgressOps(progress, ops) {
+  for (const op of ops) {
+    if (!op || typeof op !== "object") continue;
+
+    if (op.type === "clear") {
+      for (const videoId of Object.keys(progress)) delete progress[videoId];
+    } else if (op.type === "remove") {
+      const videoId = String(op.videoId || "");
+      if (videoId) delete progress[videoId];
+    } else if (op.type === "upsert") {
+      upsertProgressEntry(progress, op.entry);
+    }
   }
+}
+
+function normalizeStoredProgress(stored) {
+  return Object.fromEntries(
+    Object.entries(stored && typeof stored === "object" ? stored : {})
+      .filter(([videoId]) => typeof videoId === "string" && videoId)
+      .map(([videoId, entry]) => [videoId, normalizeProgressEntry(videoId, entry)])
+  );
 }
 
 async function customAccountsRequest(req, res, requestUrl) {
@@ -250,8 +306,21 @@ async function customAccountsRequest(req, res, requestUrl) {
   }
 
   if (req.method === "GET") {
-    const db = readAccountsDb();
-    const account = db[key] || { name: normalized, progress: {} };
+    let account;
+    try {
+      const db = readAccountsDb();
+      account = db[key] || { name: normalized, progress: {} };
+    } catch (err) {
+      // Answering with an empty history would make the client mirror it over its local copy.
+      console.error("Error reading accounts file:", err);
+      res.writeHead(500, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
+      });
+      res.end("Failed to read accounts storage");
+      return;
+    }
+
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -259,32 +328,49 @@ async function customAccountsRequest(req, res, requestUrl) {
     });
     res.end(JSON.stringify(account));
   } else if (req.method === "POST") {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => {
-      try {
-        const payload = JSON.parse(body || "{}");
-        const db = readAccountsDb();
-        db[key] = {
-          name: normalized,
-          progress: payload.progress || {}
-        };
-        writeAccountsDb(db);
-        res.writeHead(200, {
-          "Content-Type": "application/json; charset=utf-8",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end(JSON.stringify({ success: true }));
-      } catch (err) {
-        res.writeHead(400, {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Access-Control-Allow-Origin": "*"
-        });
-        res.end("Invalid JSON body");
+    let payload;
+    try {
+      payload = JSON.parse((await readBody(req)) || "{}");
+    } catch (err) {
+      res.writeHead(400, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
+      });
+      res.end("Invalid JSON body");
+      return;
+    }
+
+    try {
+      const db = readAccountsDb();
+      const stored = db[key] && typeof db[key] === "object" ? db[key] : {};
+      const progress = normalizeStoredProgress(stored.progress);
+
+      if (Array.isArray(payload.ops)) {
+        applyProgressOps(progress, payload.ops);
+      } else if (payload.progress && typeof payload.progress === "object") {
+        // Older clients upload their whole map; merge it so their copy cannot drop entries.
+        for (const [videoId, entry] of Object.entries(payload.progress)) {
+          upsertProgressEntry(progress, { ...entry, videoId });
+        }
       }
-    });
+
+      db[key] = { name: normalized, progress };
+      writeAccountsDb(db);
+
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
+      });
+      res.end(JSON.stringify({ success: true, count: Object.keys(progress).length }));
+    } catch (err) {
+      // The client keeps the change queued and retries, so failing loudly is what saves it.
+      console.error("Error writing accounts file:", err);
+      res.writeHead(500, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Access-Control-Allow-Origin": "*"
+      });
+      res.end("Failed to persist account");
+    }
   } else if (req.method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
