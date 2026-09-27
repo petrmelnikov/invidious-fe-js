@@ -32,16 +32,7 @@ export function renderSettings() {
         </select>
       </label>
 
-      <label>
-        Preferred quality
-        <select name="quality" class="select">
-          ${option("auto", "Auto", config.quality)}
-          ${option("1080p", "1080p", config.quality)}
-          ${option("720p", "720p", config.quality)}
-          ${option("480p", "480p", config.quality)}
-          ${option("360p", "360p", config.quality)}
-        </select>
-      </label>
+      <p class="form-hint">Videos start at the maximum available quality with original audio. Russian is selected when it is an original language, not an automatic translation. You can change quality and audio in the player for the current video.</p>
 
       <label>
         Comments source
@@ -116,7 +107,6 @@ export function renderSettings() {
       apiOrigin: form.apiOrigin || defaults.apiOrigin,
       region: form.region,
       theme: form.theme,
-      quality: form.quality,
       comments: form.comments,
       sponsorBlock: {
         enabled: form.sponsorBlockEnabled === "on",

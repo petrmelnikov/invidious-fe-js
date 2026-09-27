@@ -1,6 +1,9 @@
 import { clearAccountProgress, clearVideoProgress, getCurrentAccount, listVideoProgress, signIn, signOut } from "../account.js";
 import { emptyState, pageHeader } from "../components.js";
-import { escapeHtml, relativeTime, secondsToDuration, setTitle } from "../utils.js";
+import { escapeHtml, setTitle } from "../utils.js";
+
+import { progressCard } from "../saved-videos.js";
+import { navigate } from "../router.js";
 
 const view = () => document.getElementById("view");
 
@@ -28,7 +31,7 @@ export function renderAccount() {
         <p class="form-hint">
           ${account
             ? `Current account: <strong>${escapeHtml(account.name)}</strong>. Enter another name to switch accounts or create a new one.`
-            : "Account names stay in this browser and are never sent to the backend."}
+            : "Your account name and watch progress are synced with this frontend server."}
         </p>
       </fieldset>
 
@@ -60,7 +63,7 @@ export function renderAccount() {
     event.preventDefault();
     const name = new FormData(event.currentTarget).get("name");
     if (!(await signIn(name))) return;
-    renderAccount();
+    navigate("/");
   });
 
   document.getElementById("account-signout")?.addEventListener("click", () => {
@@ -81,32 +84,4 @@ export function renderAccount() {
       renderAccount();
     });
   });
-}
-
-function progressCard(entry) {
-  const title = entry.title || "Untitled video";
-  const href = `/watch?v=${encodeURIComponent(entry.videoId)}`;
-  const resumeAt = secondsToDuration(entry.currentTime) || "0:00";
-  const duration = secondsToDuration(entry.duration);
-  const updatedAt = relativeTime(Math.floor(Number(entry.updatedAt || 0) / 1000));
-
-  return `
-    <article class="video-card video-card-compact progress-card">
-      <a class="thumb" href="${href}" data-link aria-label="${escapeHtml(title)}">
-        ${entry.thumbnail ? `<img src="${escapeHtml(entry.thumbnail)}" alt="" loading="lazy">` : '<span class="thumb-fallback">Resume</span>'}
-        <span class="duration">${escapeHtml(duration ? `${resumeAt} / ${duration}` : resumeAt)}</span>
-      </a>
-
-      <div class="video-info">
-        <h2><a href="${href}" data-link>${escapeHtml(title)}</a></h2>
-        ${entry.author ? `<p class="meta">${escapeHtml(entry.author)}</p>` : ""}
-        <p class="meta">Resume at ${escapeHtml(resumeAt)}${updatedAt ? ` · Updated ${escapeHtml(updatedAt)}` : ""}</p>
-      </div>
-
-      <button class="button button-ghost card-remove" type="button"
-        data-remove-progress="${escapeHtml(entry.videoId)}"
-        data-remove-title="${escapeHtml(title)}"
-        title="Remove from saved progress" aria-label="Remove ${escapeHtml(title)} from saved progress">✕</button>
-    </article>
-  `;
 }

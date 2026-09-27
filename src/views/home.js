@@ -1,43 +1,33 @@
-import { api } from "../api.js";
-import { errorState, grid, loading, pageHeader } from "../components.js";
+import { clearVideoProgress, getCurrentAccount, listVideoProgress } from "../account.js";
+import { emptyState, pageHeader } from "../components.js";
+import { progressCard } from "../saved-videos.js";
 import { setTitle } from "../utils.js";
 
-const view = () => document.getElementById("view");
-
-export async function renderHome() {
-  setTitle("");
-  view().innerHTML = loading("Loading Invidious");
-
-  try {
-    const [popular, trending, stats] = await Promise.allSettled([
-      api.popular(),
-      api.trending(),
-      api.stats()
-    ]);
-
-    const popularItems = popular.status === "fulfilled" ? popular.value.slice(0, 12) : [];
-    const trendingItems = trending.status === "fulfilled" ? trending.value.slice(0, 12) : [];
-    const statsValue = stats.status === "fulfilled" ? stats.value : null;
-    const userCount = statsValue?.usage?.users?.total;
-
-    view().innerHTML = `
-      ${pageHeader("Watch without the noise", userCount ? `${userCount.toLocaleString()} users on this backend` : "A standalone frontend for your Invidious backend")}
-      <section class="section">
-        <div class="section-heading">
-          <h2>Trending</h2>
-          <a href="/feed/trending" data-link>View all</a>
-        </div>
-        ${grid(trendingItems)}
-      </section>
-      <section class="section">
-        <div class="section-heading">
-          <h2>Popular</h2>
-          <a href="/feed/popular" data-link>View all</a>
-        </div>
-        ${grid(popularItems)}
-      </section>
+export function renderHome() {
+  setTitle("Home");
+  const view = document.getElementById("view");
+  const account = getCurrentAccount();
+  if (!account) {
+    view.innerHTML = `
+      ${pageHeader("Find something to watch", "Search for videos, channels and playlists using the search bar above.")}
+      ${emptyState("Your videos, saved here", "Sign in to continue watching your saved videos and discover similar ones.")}
+      <div class="form-actions"><a class="button" href="/account" data-link>Sign in</a></div>
     `;
-  } catch (error) {
-    view().innerHTML = errorState(error);
+    return;
   }
+
+  const saved = listVideoProgress();
+  view.innerHTML = `
+    ${pageHeader("Saved videos", `Continue watching as ${account.name}.`, '<a class="button button-ghost" href="/recommendations" data-link>Similar videos</a>')}
+    ${saved.length
+      ? `<section class="list">${saved.map(progressCard).join("")}</section>`
+      : emptyState("No saved videos yet", "Start watching a video while signed in. Your progress will appear here.")}
+  `;
+  view.querySelectorAll("[data-remove-progress]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (window.confirm(`Remove "${button.dataset.removeTitle}" from saved progress?`)) {
+        clearVideoProgress(button.dataset.removeProgress);
+      }
+    });
+  });
 }

@@ -4,7 +4,7 @@ const baseDefaults = {
   apiOrigin: "http://localhost:3000",
   region: "",
   theme: "system",
-  quality: "auto",
+  quality: "best",
   playbackSpeed: 1,
   fullPagePlayer: false,
   comments: "youtube",
@@ -65,6 +65,7 @@ function mergeConfig(saved = {}) {
   return {
     ...defaults,
     ...saved,
+    quality: "best",
     sponsorBlock: mergeSponsorBlock(saved.sponsorBlock)
   };
 }

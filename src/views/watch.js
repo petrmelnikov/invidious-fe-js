@@ -3,6 +3,7 @@ import { api, assetUrl } from "../api.js";
 import { parseChapters } from "../chapters.js";
 import { errorState, list, loading } from "../components.js";
 import { getConfig, saveConfig } from "../config.js";
+import { chooseDashQuality, chooseInitialAudioTrack, compareVideoQuality } from "../player-preferences.js";
 import { installSponsorBlock } from "../sponsorblock.js";
 import { installTimeline } from "../timeline.js";
 import { compactNumber, escapeHtml, fullNumber, parseYoutubeTime, pickThumbnail, relativeTime, secondsToDuration, setTitle } from "../utils.js";
@@ -43,13 +44,7 @@ function chooseStreams(video) {
   const streams = Array.isArray(video.formatStreams)
     ? video.formatStreams.filter((stream) => String(stream.itag) !== "17")
     : [];
-  const sorted = streams.sort((a, b) => Number.parseInt(b.resolution || b.quality || 0, 10) - Number.parseInt(a.resolution || a.quality || 0, 10));
-  const preferred = getConfig().quality;
-
-  if (!preferred || preferred === "auto") return sorted;
-
-  const match = sorted.find((stream) => [stream.qualityLabel, stream.resolution, stream.quality].some((value) => String(value || "").includes(preferred)));
-  return match ? [match, ...sorted.filter((stream) => stream !== match)] : sorted;
+  return streams.sort(compareVideoQuality);
 }
 
 function hasDashStreams(video) {
@@ -129,6 +124,7 @@ function watchMarkup(video, videoId) {
           </div>
           <div class="watch-header-actions">
             <a class="button button-ghost" href="${escapeHtml(youtubeUrl)}" target="_blank" rel="noreferrer noopener">Open on YouTube</a>
+            <a class="button button-ghost" id="youtube-at-time" href="${escapeHtml(`${youtubeUrl}&t=0s`)}" target="_blank" rel="noreferrer noopener">Open on YouTube at current time</a>
           </div>
         </header>
 
@@ -205,7 +201,10 @@ function streamSelector(video, streams, selected, dashAvailable) {
     <label class="player-select">
       Quality
       <select id="stream-select" class="select">
-        ${dashAvailable ? `<option value="${escapeHtml(api.dashManifest(video.videoId))}" data-mode="dash" selected>Auto DASH</option>` : ""}
+        ${dashAvailable ? `
+          <option value="${escapeHtml(api.dashManifest(video.videoId))}" data-mode="dash-best" selected>Maximum quality</option>
+          <option value="${escapeHtml(api.dashManifest(video.videoId))}" data-mode="dash">Auto DASH</option>
+        ` : ""}
         ${dashOptions.map((stream) => `
           <option value="${escapeHtml(api.dashManifest(video.videoId))}" data-mode="dash-fixed" data-height="${escapeHtml(stream.height)}" data-label="${escapeHtml(stream.label)}">
             ${escapeHtml(stream.label)} DASH
@@ -251,9 +250,12 @@ function getLanguageName(langCode) {
 }
 
 function formatAudioTrack(track) {
-  let label = getLanguageName(track.lang);
-  if (track.roles && track.roles.length > 0 && !track.roles.includes("main")) {
-    label += ` (${track.roles.join(", ")})`;
+  let label = getLanguageName(track.lang || "und");
+  const roles = (track.roles || []).map((role) => role.value || role);
+  if (roles.includes("main")) {
+    label += " (Original)";
+  } else if (roles.length) {
+    label += ` (${roles.join(", ")})`;
   }
   return label;
 }
@@ -268,7 +270,9 @@ function populateAudioTracks() {
   if (audioTracks.length > 1) {
     const currentTrack = dashPlayer.getCurrentTrackFor("audio");
     selector.innerHTML = audioTracks.map((track, index) => {
-      const isSelected = currentTrack && (track.id === currentTrack.id || track.index === currentTrack.index);
+      const isSelected = currentTrack && (track === currentTrack
+        || (track.id != null && track.id === currentTrack.id)
+        || (track.index != null && track.index === currentTrack.index));
       return `<option value="${index}" ${isSelected ? "selected" : ""}>${escapeHtml(formatAudioTrack(track))}</option>`;
     }).join("");
     container.style.display = "inline-flex";
@@ -420,6 +424,25 @@ function installWatchInteractions(video, search) {
     player.load();
     setPlayerPlaybackRate(player, playbackRate, speedControl);
   }, { once: true });
+
+  const timestampLink = document.getElementById("youtube-at-time");
+  if (timestampLink) {
+    const baseUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(video.videoId)}`;
+    const currentSecond = () => {
+      const t = player ? Number(player.currentTime) : Number(resumeTime);
+      return Number.isFinite(t) && t > 0 ? Math.max(0, Math.floor(t)) : 0;
+    };
+    const refreshTimestampLink = () => {
+      timestampLink.href = `${baseUrl}&t=${currentSecond()}s`;
+    };
+    refreshTimestampLink();
+    player?.addEventListener("timeupdate", refreshTimestampLink);
+    player?.addEventListener("seeking", refreshTimestampLink);
+    player?.addEventListener("loadedmetadata", refreshTimestampLink);
+    ["click", "auxclick", "contextmenu"].forEach((eventName) => {
+      timestampLink.addEventListener(eventName, refreshTimestampLink);
+    });
+  }
 }
 
 function loadDashScript() {
@@ -443,6 +466,7 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
   const normalizedPlaybackRate = normalizePlaybackRate(playbackRate);
   try {
     const dashjs = await loadDashScript();
+    if (!player.isConnected) return;
     const manifest = option.value;
     const requestedQuality = {
       mode: option.dataset.mode,
@@ -457,11 +481,20 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
       dashPlayer = dashjs.MediaPlayer().create();
       dashPlayer.updateSettings({
         streaming: {
-          abr: { autoSwitchBitrate: { audio: true, video: true } },
+          lastBitrateCachingInfo: { enabled: false },
+          lastMediaSettingsCachingInfo: { enabled: false },
+          abr: {
+            autoSwitchBitrate: { audio: true, video: requestedQuality.mode === "dash" },
+            initialRepresentationRatio: { video: 1 }
+          },
           buffer: { stableBufferTime: 30 }
         }
       });
-      dashPlayer.initialize(player, manifest, !paused);
+      dashPlayer.setCustomInitialTrackSelectionFunction((tracks) => {
+        if (tracks[0]?.type !== "audio") return tracks;
+        const preferred = chooseInitialAudioTrack(tracks);
+        return preferred ? [preferred] : [];
+      });
       dashPlayer.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
         setPlayerPlaybackRate(player, normalizedPlaybackRate);
         applyDashQuality(requestedQuality);
@@ -478,6 +511,7 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
           dashPlayer.on(eventName, applyResume);
         });
       }
+      dashPlayer.initialize(player, manifest, !paused);
     } else {
       setPlayerPlaybackRate(player, normalizedPlaybackRate);
       applyDashQuality(requestedQuality);
@@ -487,15 +521,19 @@ async function initializeDash(player, option, currentTime = 0, paused = true, pl
     }
 
     if (note) {
-      note.textContent = requestedQuality.mode === "dash-fixed"
-        ? `DASH fixed at ${requestedQuality.label}.`
-        : "DASH adaptive playback enabled.";
+      note.textContent = requestedQuality.mode === "dash-best"
+        ? "Maximum available video quality. Original audio is selected by default."
+        : requestedQuality.mode === "dash-fixed"
+          ? `DASH fixed at ${requestedQuality.label}.`
+          : "DASH adaptive playback enabled.";
     }
   } catch (error) {
     if (note) note.textContent = `${error.message}. Falling back to progressive playback.`;
-    document.querySelector("#stream-select option[data-mode='progressive']")?.setAttribute("selected", "selected");
-    const fallback = document.querySelector("#stream-select option[data-mode='progressive']")?.value;
+    const fallbackOption = document.querySelector("#stream-select option[data-mode='progressive']");
+    const fallback = fallbackOption?.value;
     if (fallback) {
+      destroyDash();
+      fallbackOption.selected = true;
       player.src = fallback;
       player.load();
       setPlayerPlaybackRate(player, normalizedPlaybackRate);
@@ -587,7 +625,7 @@ function destroyDash() {
 function applyDashQuality(requestedQuality) {
   if (!dashPlayer) return;
 
-  const auto = requestedQuality.mode !== "dash-fixed";
+  const auto = requestedQuality.mode === "dash";
   dashPlayer.updateSettings({
     streaming: {
       abr: { autoSwitchBitrate: { video: auto } }
@@ -597,13 +635,14 @@ function applyDashQuality(requestedQuality) {
   if (auto) return;
 
   const bitrates = dashPlayer.getBitrateInfoListFor("video") || [];
-  const quality = bitrates
-    .map((entry, index) => ({ ...entry, index }))
-    .filter((entry) => Number(entry.height) === requestedQuality.height)
-    .sort((a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0))[0];
+  const quality = chooseDashQuality(bitrates, requestedQuality);
 
   if (quality) {
     dashPlayer.setQualityFor("video", quality.qualityIndex ?? quality.index, true);
+    const maximumOption = document.querySelector("#stream-select option[data-mode='dash-best']");
+    if (maximumOption && requestedQuality.mode === "dash-best") {
+      maximumOption.textContent = `Maximum (${quality.height}p)`;
+    }
   }
 }
 

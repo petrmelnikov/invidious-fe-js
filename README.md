@@ -56,13 +56,15 @@ the app returns to the defaults provided by the container environment.
 ## Implemented Surface
 
 - Search with filters through `/api/v1/search`.
-- Trending and popular feeds.
+- Signed-in homepage with saved videos and resume controls.
+- A Similar videos page based on the 12 most recently saved videos, with duplicates and saved videos excluded.
 - Watch page with proxied video streams via `/api/v1/videos/:id?local=true`.
 - SponsorBlock integration on the watch player with per-category auto-skip or manual-skip behavior.
 - Related videos, comments, captions, metadata, and channel links.
 - Channel overview, latest videos, playlists, community, channels, and search.
 - Public playlists.
-- Backend origin, region, theme, and video quality preferences.
+- Maximum available video quality and original audio on every new video; Russian is preferred only among original tracks, not automatic translations. Quality and audio can still be changed for the current video.
+- Backend origin, region, theme, and playback speed preferences.
 
 ## SponsorBlock
 
@@ -84,4 +86,11 @@ this app better than the direct API approach. The available packages are either
 Node-only wrappers or userscript bundles, so this frontend talks directly to the
 official API instead of vendoring a third-party runtime.
 
-Authenticated account features can be added later on top of the same API client.
+Account names and watch progress are synced through the frontend server. Saved
+videos are the existing watch-progress list: videos appear after playback starts
+and leave the list when finished or removed. Guests see search and sign-in entry
+points. Similar videos are available after signing in; an unavailable seed does
+not prevent recommendations from the other saved videos from being shown.
+
+Run `npm run check` for JavaScript syntax checks and `npm test` for playback
+selection and recommendation tests.

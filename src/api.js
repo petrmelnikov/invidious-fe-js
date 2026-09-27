@@ -98,11 +98,9 @@ export async function request(path, params = {}, options = {}) {
 
 export const api = {
   stats: () => request("/api/v1/stats"),
-  popular: () => request("/api/v1/popular"),
-  trending: (type = "Default") => request("/api/v1/trending", { type }),
   search: (q, options = {}) => request("/api/v1/search", { q, ...options }),
   suggestions: (q) => request("/api/v1/search/suggestions", { q }),
-  video: (id) => request(`/api/v1/videos/${encodeURIComponent(id)}`, { local: "true" }),
+  video: (id, options = {}) => request(`/api/v1/videos/${encodeURIComponent(id)}`, { local: "true" }, options),
   comments: (id, source = "youtube") => request(`/api/v1/comments/${encodeURIComponent(id)}`, { source }),
   channel: (ucid) => request(`/api/v1/channels/${encodeURIComponent(ucid)}`),
   channelTab: (ucid, tab, params = {}) => request(`/api/v1/channels/${encodeURIComponent(ucid)}/${tab}`, params),
