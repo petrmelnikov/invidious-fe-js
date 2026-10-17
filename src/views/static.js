@@ -7,9 +7,10 @@ export function renderStaticPage(_ctx, page) {
   if (page === "licenses") {
     setTitle("Licenses");
     view().innerHTML = `
-      ${pageHeader("JavaScript licenses", "This standalone shell currently ships without third-party runtime packages.")}
+      ${pageHeader("JavaScript licenses", "Player libraries are loaded on demand from jsDelivr.")}
       <section class="section text-section">
-        <p>The video and media endpoints are provided by the configured Invidious backend. Add third-party libraries here when the frontend starts bundling them.</p>
+        <p>The optional JS player uses <a href="https://github.com/muxinc/media-chrome/tree/v4.19.3" target="_blank" rel="noreferrer noopener">Media Chrome 4.19.3</a>, licensed under the <a href="https://github.com/muxinc/media-chrome/blob/v4.19.3/LICENSE" target="_blank" rel="noreferrer noopener">MIT license</a>.</p>
+        <p>DASH playback uses <a href="https://github.com/Dash-Industry-Forum/dash.js/tree/v4.7.4" target="_blank" rel="noreferrer noopener">dash.js 4.7.4</a>. Video and media endpoints are provided by the configured Invidious backend.</p>
       </section>
     `;
     return;

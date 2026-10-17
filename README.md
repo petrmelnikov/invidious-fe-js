@@ -59,12 +59,15 @@ the app returns to the defaults provided by the container environment.
 - Signed-in homepage with saved videos and resume controls.
 - A Similar videos page based on the 12 most recently saved videos, with duplicates and saved videos excluded.
 - Watch page with proxied video streams via `/api/v1/videos/:id?local=true`.
+- Switch between native controls and the JS player (Media Chrome) under the video or in Settings. The choice is saved locally. In JS mode, double-tap the left/right third to seek backward/forward 10 seconds; repeated taps continue seeking. Position, playback state, speed and stream selection are preserved when switching.
 - SponsorBlock integration on the watch player with per-category auto-skip or manual-skip behavior.
 - Related videos, comments, captions, metadata, and channel links.
 - Channel overview, latest videos, playlists, community, channels, and search.
 - Public playlists.
 - Maximum available video quality and original audio on every new video; Russian is preferred only among original tracks, not automatic translations. Quality and audio can still be changed for the current video.
-- Backend origin, region, theme, and playback speed preferences.
+- Backend origin, region, theme, player mode, and playback speed preferences.
+
+The JS player lazily loads MIT-licensed [Media Chrome 4.19.3](https://github.com/muxinc/media-chrome) from jsDelivr. Native controls stay available if it cannot load. DASH continues to use the existing dash.js integration.
 
 ## SponsorBlock
 

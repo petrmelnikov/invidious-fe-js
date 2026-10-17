@@ -4,6 +4,7 @@ import { parseChapters } from "../chapters.js";
 import { errorState, list, loading } from "../components.js";
 import { getConfig, saveConfig } from "../config.js";
 import { chooseDashQuality, chooseInitialAudioTrack, compareVideoQuality } from "../player-preferences.js";
+import { installPlayerMode, jsPlayerControls } from "../js-player.js";
 import { installSponsorBlock } from "../sponsorblock.js";
 import { installTimeline } from "../timeline.js";
 import { compactNumber, escapeHtml, fullNumber, parseYoutubeTime, pickThumbnail, relativeTime, secondsToDuration, setTitle } from "../utils.js";
@@ -90,13 +91,14 @@ function watchMarkup(video, videoId) {
     <section class="watch-layout${fullPage ? " fullpage" : ""}">
       <article class="watch-main">
         <div class="player-frame">
+          ${playerAvailable ? '<media-controller class="watch-player" gesturesdisabled nohotkeys noautohide novolumepref nomutedpref nosubtitleslangpref>' : ""}
           ${dashAvailable || selected ? `
-            <video id="video-player" controls playsinline preload="metadata" poster="${escapeHtml(poster)}">
+            <video id="video-player" slot="media" controls playsinline preload="metadata" poster="${escapeHtml(poster)}">
               ${dashAvailable ? "" : sourceTags(video, streams).join("")}
               ${captionTracks(video).join("")}
             </video>
           ` : video.hlsUrl ? `
-            <video id="video-player" controls playsinline preload="metadata" poster="${escapeHtml(poster)}">
+            <video id="video-player" slot="media" controls playsinline preload="metadata" poster="${escapeHtml(poster)}">
               <source src="${escapeHtml(assetUrl(video.hlsUrl))}" type="application/x-mpegURL">
               ${captionTracks(video).join("")}
             </video>
@@ -104,11 +106,13 @@ function watchMarkup(video, videoId) {
             <img src="${escapeHtml(poster)}" alt="">
             <div class="player-message">No browser-playable stream was returned by the backend.</div>
           `}
+          ${playerAvailable ? `${jsPlayerControls()}</media-controller>` : ""}
         </div>
 
         ${playerAvailable ? playerEnhancements() : ""}
 
         ${playerAvailable ? playbackControls(video, streams, selected, dashAvailable) : ""}
+        <p class="player-note" id="player-mode-note" role="status" hidden></p>
     <p class="player-note" id="account-progress-note"></p>
         <p class="player-note" id="player-note"></p>
         <p class="player-note" id="sponsorblock-note"></p>
@@ -181,6 +185,13 @@ function playbackControls(video, streams, selected, dashAvailable) {
   const fullPage = Boolean(getConfig().fullPagePlayer);
   return `
     <div class="player-controls">
+      <label class="player-select">
+        Player
+        <select id="player-mode-select" class="select">
+          <option value="native" ${getConfig().playerMode === "native" ? "selected" : ""}>Native</option>
+          <option value="js" ${getConfig().playerMode === "js" ? "selected" : ""}>JS (Media Chrome)</option>
+        </select>
+      </label>
       ${dashAvailable || streams.length ? streamSelector(video, streams, selected, dashAvailable) : ""}
       <label class="player-select" id="audio-select-container" style="display: none;">
         Audio
@@ -331,6 +342,12 @@ function installWatchInteractions(video, search) {
 
   if (player) {
     setPlayerPlaybackRate(player, initialPlaybackRate, speedControl);
+    installPlayerMode({
+      player,
+      controller: player.closest("media-controller"),
+      selector: document.getElementById("player-mode-select"),
+      note: document.getElementById("player-mode-note")
+    });
     installAccountProgress({
       player,
       video,

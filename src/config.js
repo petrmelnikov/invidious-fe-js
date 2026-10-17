@@ -6,6 +6,7 @@ const baseDefaults = {
   theme: "system",
   quality: "best",
   playbackSpeed: 1,
+  playerMode: "native",
   fullPagePlayer: false,
   comments: "youtube",
   sponsorBlock: {
@@ -66,6 +67,7 @@ function mergeConfig(saved = {}) {
     ...defaults,
     ...saved,
     quality: "best",
+    playerMode: (saved.playerMode ?? defaults.playerMode) === "js" ? "js" : "native",
     sponsorBlock: mergeSponsorBlock(saved.sponsorBlock)
   };
 }

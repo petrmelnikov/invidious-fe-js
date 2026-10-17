@@ -35,6 +35,15 @@ export function renderSettings() {
       <p class="form-hint">Videos start at the maximum available quality with original audio. Russian is selected when it is an original language, not an automatic translation. You can change quality and audio in the player for the current video.</p>
 
       <label>
+        Video player
+        <select name="playerMode" class="select">
+          ${option("native", "Native", config.playerMode)}
+          ${option("js", "JS (Media Chrome)", config.playerMode)}
+        </select>
+      </label>
+      <p class="form-hint">In the JS player, double-tap the left or right third of the video to seek backward or forward 10 seconds.</p>
+
+      <label>
         Comments source
         <select name="comments" class="select">
           ${option("youtube", "YouTube", config.comments)}
@@ -107,6 +116,7 @@ export function renderSettings() {
       apiOrigin: form.apiOrigin || defaults.apiOrigin,
       region: form.region,
       theme: form.theme,
+      playerMode: form.playerMode,
       comments: form.comments,
       sponsorBlock: {
         enabled: form.sponsorBlockEnabled === "on",
