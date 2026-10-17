@@ -1,4 +1,5 @@
-import { clearVideoProgress, getCurrentAccount, getVideoProgress, saveVideoProgress } from "../account.js";
+import { getVideoProgress } from "../account.js";
+import { getProgressResumeTarget, installAccountProgress } from "../account-progress.js";
 import { api, assetUrl } from "../api.js";
 import { parseChapters } from "../chapters.js";
 import { errorState, list, loading } from "../components.js";
@@ -481,9 +482,12 @@ function loadDashScript() {
 async function initializeDash(player, option, currentTime = 0, paused = true, playbackRate = 1) {
   const note = document.getElementById("player-note");
   const normalizedPlaybackRate = normalizePlaybackRate(playbackRate);
+  const progressTarget = getProgressResumeTarget(player);
   try {
     const dashjs = await loadDashScript();
     if (!player.isConnected) return;
+    const syncedTarget = getProgressResumeTarget(player);
+    if (syncedTarget !== progressTarget) currentTime = syncedTarget.time;
     const manifest = option.value;
     const requestedQuality = {
       mode: option.dataset.mode,
@@ -565,6 +569,7 @@ function createDashResumeHandler(player, currentTime) {
   let resumeApplied = false;
   let resumeAttempts = 0;
   let resumeTimer = 0;
+  const progressTarget = getProgressResumeTarget(player);
 
   const stopResumeLoop = () => {
     if (!resumeTimer) return;
@@ -582,7 +587,7 @@ function createDashResumeHandler(player, currentTime) {
   };
 
   const applyResume = () => {
-    if (resumeApplied || !player.isConnected) {
+    if (resumeApplied || !player.isConnected || getProgressResumeTarget(player) !== progressTarget) {
       stopResumeLoop();
       return;
     }
@@ -689,135 +694,6 @@ function setPlayerPlaybackRate(player, rate, control = document.getElementById("
 function normalizeResumeTime(value) {
   const time = Number(value);
   return Number.isFinite(time) && time > 0 ? time : 0;
-}
-
-function installAccountProgress({ player, video, noteElement, initialTime = 0, applyInitialSeek = true }) {
-  const account = getCurrentAccount();
-  if (!player || !account) {
-    if (noteElement) noteElement.textContent = "";
-    return;
-  }
-
-  const resumeTime = normalizeResumeTime(initialTime);
-  const thumbnail = assetUrl(pickThumbnail(video.videoThumbnails, 1280));
-  let lastSavedTime = resumeTime || Number.NEGATIVE_INFINITY;
-  let resumeApplied = resumeTime <= 0;
-  let resumeAttempts = 0;
-  let resumeTimer = 0;
-
-  if (noteElement) {
-    noteElement.textContent = resumeTime > 0
-      ? `Resuming for ${account.name} at ${secondsToDuration(resumeTime)}.`
-      : `Saving progress for ${account.name}.`;
-  }
-
-  const stopResumeLoop = () => {
-    if (!resumeTimer) return;
-    window.clearTimeout(resumeTimer);
-    resumeTimer = 0;
-  };
-
-  const queueResumeAttempt = () => {
-    if (resumeApplied || resumeTimer || resumeAttempts >= 40 || !player.isConnected) return;
-    resumeTimer = window.setTimeout(() => {
-      resumeTimer = 0;
-      applyResume();
-    }, 250);
-  };
-
-  const applyResume = () => {
-    if (!applyInitialSeek || resumeApplied || !player.isConnected) {
-      stopResumeLoop();
-      return;
-    }
-
-    const duration = Number(player.duration || 0);
-    const safeTime = duration > 0 ? Math.min(resumeTime, Math.max(duration - 1, 0)) : resumeTime;
-    if (safeTime <= 0) {
-      resumeApplied = true;
-      stopResumeLoop();
-      return;
-    }
-
-    const seekableEnd = player.seekable?.length ? Number(player.seekable.end(player.seekable.length - 1) || 0) : 0;
-    const beforeSeek = Number(player.currentTime || 0);
-    const canSeek = player.readyState >= 1 || duration > 0 || seekableEnd > 0;
-
-    if (canSeek) {
-      try {
-        player.currentTime = safeTime;
-      } catch {
-        // Some browsers reject the first seek until media metadata settles.
-      }
-    }
-
-    const afterSeek = Number(player.currentTime || 0);
-    resumeApplied = Math.abs(afterSeek - safeTime) < 1 || afterSeek >= Math.max(safeTime - 1, 1) || afterSeek > beforeSeek + 0.5;
-
-    if (resumeApplied) {
-      stopResumeLoop();
-      return;
-    }
-
-    resumeAttempts += 1;
-    queueResumeAttempt();
-  };
-
-  if (applyInitialSeek && resumeTime > 0) {
-    ["loadedmetadata", "loadeddata", "canplay", "play", "playing", "seeked"].forEach((eventName) => {
-      player.addEventListener(eventName, applyResume);
-    });
-    applyResume();
-    queueResumeAttempt();
-  }
-
-  const persistProgress = (force = false) => {
-    if (!player.isConnected) return;
-
-    const currentTime = Number(player.currentTime || 0);
-    if (!Number.isFinite(currentTime)) return;
-    if (!force && currentTime < 3) return;
-    if (!force && Math.abs(currentTime - lastSavedTime) < 5) return;
-
-    lastSavedTime = currentTime;
-    saveVideoProgress({
-      videoId: video.videoId,
-      title: video.title,
-      author: video.author,
-      thumbnail,
-      currentTime,
-      duration: Number(player.duration || video.lengthSeconds || 0)
-    });
-  };
-
-  player.addEventListener("timeupdate", () => persistProgress(false));
-  player.addEventListener("pause", () => persistProgress(true));
-  player.addEventListener("ended", () => {
-    clearVideoProgress(video.videoId);
-    if (noteElement) noteElement.textContent = `Finished for ${account.name}.`;
-  });
-
-  // Leaving the page (closing the tab, opening another video from outside the app) fires
-  // neither pause nor timeupdate, so save the last position while the player still exists.
-  const stopHideListeners = () => {
-    window.removeEventListener("pagehide", handlePageHide);
-    document.removeEventListener("visibilitychange", handleVisibilityChange);
-  };
-
-  const handlePageHide = () => {
-    if (!player.isConnected) {
-      stopHideListeners();
-      return;
-    }
-    persistProgress(true);
-  };
-
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") handlePageHide();
-  };
-
-  window.addEventListener("pagehide", handlePageHide);
-  document.addEventListener("visibilitychange", handleVisibilityChange);
 }
 
 async function loadComments(id) {

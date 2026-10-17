@@ -95,5 +95,12 @@ and leave the list when finished or removed. Guests see search and sign-in entry
 points. Similar videos are available after signing in; an unavailable seed does
 not prevent recommendations from the other saved videos from being shown.
 
-Run `npm run check` for JavaScript syntax checks and `npm test` for playback
-selection and recommendation tests.
+Progress writes check a server revision for each video. Stale saves and removals
+are rejected, and revisions remain stored after completion or deletion. Returning
+to a tab refreshes progress; if another device changed the position, the player
+pauses and moves to the saved position (or resets after completion/removal).
+Unchanged paused positions are not saved again. Existing account files migrate
+automatically; old open clients must reload before they can save with revisions.
+
+Run `npm run check` for JavaScript syntax checks and `npm test` for playback,
+progress synchronization, HTTP storage, and recommendation tests.
