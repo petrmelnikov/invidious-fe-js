@@ -3,6 +3,7 @@ import { defaults, getConfig, resetConfig, saveConfig } from "../config.js";
 import { getSponsorBlockSettings, sponsorBlockCategoryOptions } from "../sponsorblock.js";
 import { pageHeader } from "../components.js";
 import { escapeHtml, setTitle } from "../utils.js";
+import { mountUpdates, updatesSectionMarkup } from "./updates.js";
 
 const view = () => document.getElementById("view");
 
@@ -96,6 +97,8 @@ export function renderSettings() {
       </div>
     </form>
 
+    ${updatesSectionMarkup()}
+
     <section class="section">
       <div class="section-heading"><h2>Current API</h2></div>
       <code class="code-block">${escapeHtml(apiOrigin())}/api/v1</code>
@@ -133,6 +136,8 @@ export function renderSettings() {
     resetConfig();
     renderSettings();
   });
+
+  mountUpdates();
 }
 
 function option(value, label, selected) {

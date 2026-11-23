@@ -4,6 +4,7 @@
 
 set -e
 
+cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")"
 COMPOSE_FILE="compose.yaml"
 DATA_DIR="data"
 
@@ -16,6 +17,7 @@ function show_help() {
   echo "  stop    - Stop the application"
   echo "  build   - Rebuild the docker image"
   echo "  update  - Pull latest changes, rebuild and restart"
+  echo "  updates - Enable web updates and start the frontend and its updater"
   echo "  help    - Show this help message"
   echo ""
   echo "Run without sudo: git uses your own keys, and docker is invoked"
@@ -35,11 +37,22 @@ function run_git() {
 # Run docker compose, prefixing with sudo only when the current user
 # cannot reach the docker daemon.
 function compose() {
+  local profile=()
+  export INVIDIOUS_FE_DIR="$PWD"
+  export INVIDIOUS_FE_REVISION
+  INVIDIOUS_FE_REVISION=$(run_git rev-parse --verify HEAD 2>/dev/null || echo unknown)
+  if [[ "${ENABLE_WEB_UPDATES:-}" == 1 || "$(run_git config --local --get invidious.webUpdates 2>/dev/null)" == true ]]; then
+    profile=(--profile updates)
+    export INVIDIOUS_DOCKER_GID INVIDIOUS_UPDATER_UID INVIDIOUS_UPDATER_GID
+    INVIDIOUS_DOCKER_GID=$(stat -c %g /var/run/docker.sock)
+    INVIDIOUS_UPDATER_UID=$(stat -c %u .git)
+    INVIDIOUS_UPDATER_GID=$(stat -c %g .git)
+  fi
   if docker info > /dev/null 2>&1; then
-    docker compose -f "$COMPOSE_FILE" "$@"
+    docker compose -f "$COMPOSE_FILE" "${profile[@]}" "$@"
   else
     echo "[prod] Docker daemon not accessible, using sudo..."
-    sudo docker compose -f "$COMPOSE_FILE" "$@"
+    sudo --preserve-env=INVIDIOUS_FE_DIR,INVIDIOUS_ENGINE_DIR,INVIDIOUS_FE_REVISION,INVIDIOUS_DOCKER_GID,INVIDIOUS_UPDATER_UID,INVIDIOUS_UPDATER_GID docker compose -f "$COMPOSE_FILE" "${profile[@]}" "$@"
   fi
 }
 
@@ -90,6 +103,11 @@ function do_build() {
   echo "[prod] Build complete."
 }
 
+function do_enable_updates() {
+  ENABLE_WEB_UPDATES=1 compose up -d --build invidious-fe updater
+  run_git config --local invidious.webUpdates true
+}
+
 function do_update() {
   echo "[prod] Updating application..."
 
@@ -124,6 +142,9 @@ case "$1" in
     ;;
   update)
     do_update
+    ;;
+  updates)
+    do_enable_updates
     ;;
   help)
     show_help

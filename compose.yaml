@@ -2,6 +2,8 @@ services:
   invidious-fe:
     build:
       context: .
+      args:
+        INVIDIOUS_FE_REVISION: ${INVIDIOUS_FE_REVISION:-unknown}
     image: invidious-fe:latest
     container_name: invidious-fe
     restart: unless-stopped
@@ -15,9 +17,41 @@ services:
       - "${INVIDIOUS_FE_PORT:-5173}:${PORT:-5173}"
     volumes:
       - ./data:/app/data
+      - updates-run:/run/invidious-updates:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${PORT:-5173}/ >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  updater:
+    profiles: [updates]
+    build:
+      context: ./updater
+      args:
+        UPDATER_UID: ${INVIDIOUS_UPDATER_UID:-1000}
+        UPDATER_GID: ${INVIDIOUS_UPDATER_GID:-1000}
+    restart: unless-stopped
+    environment:
+      INVIDIOUS_FE_DIR: ${INVIDIOUS_FE_DIR:-${PWD}}
+      INVIDIOUS_ENGINE_DIR: ${INVIDIOUS_ENGINE_DIR:-${INVIDIOUS_FE_DIR:-${PWD}}/../invidious}
+      UPDATER_FRONTEND_PROJECT: ${COMPOSE_PROJECT_NAME}
+    group_add:
+      - "${INVIDIOUS_DOCKER_GID:-0}"
+    volumes:
+      - type: bind
+        source: ${INVIDIOUS_FE_DIR:-${PWD}}
+        target: ${INVIDIOUS_FE_DIR:-${PWD}}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${INVIDIOUS_ENGINE_DIR:-${INVIDIOUS_FE_DIR:-${PWD}}/../invidious}
+        target: ${INVIDIOUS_ENGINE_DIR:-${INVIDIOUS_FE_DIR:-${PWD}}/../invidious}
+        bind:
+          create_host_path: false
+      - /var/run/docker.sock:/var/run/docker.sock
+      - updates-run:/run/invidious-updates
+
+volumes:
+  updates-run:

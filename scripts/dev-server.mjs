@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
 import { createReadStream, existsSync, statSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyProgressOperations, normalizeProgressAccount } from "./account-progress.mjs";
+import { handleUpdatesRequest, isUpdatesPath } from "./update-api.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const portArgIndex = process.argv.findIndex((arg) => arg === "--port" || arg === "-p");
@@ -22,11 +23,15 @@ const mime = new Map([
 ]);
 
 function resolvePath(urlPath) {
-  const decodedPath = decodeURIComponent(urlPath.split("?")[0]);
-  const normalized = normalize(decodedPath).replace(/^(\.\.[/\\])+/, "");
-  const target = resolve(join(root, normalized));
-
-  if (!target.startsWith(root)) return null;
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(urlPath.split("?")[0]);
+  } catch {
+    return null;
+  }
+  const target = resolve(join(root, decodedPath));
+  // Local development serves from the checkout, which can contain deploy keys in .git.
+  if (relative(root, target).split(sep).some(part => part.startsWith("."))) return null;
   if (existsSync(target) && statSync(target).isFile()) return target;
   return join(root, "index.html");
 }
@@ -51,6 +56,11 @@ const server = createServer((req, res) => {
 
   if (requestUrl.pathname === "/api/custom-accounts") {
     customAccountsRequest(req, res, requestUrl);
+    return;
+  }
+
+  if (isUpdatesPath(requestUrl.pathname)) {
+    handleUpdatesRequest(req, res, requestUrl);
     return;
   }
 

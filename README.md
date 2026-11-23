@@ -44,6 +44,57 @@ Supported compose environment variables:
 Settings are still saved in each browser's localStorage. Resetting settings in
 the app returns to the defaults provided by the container environment.
 
+## Updates from Settings
+
+On an Ubuntu server with both Git checkouts, enable **Settings → Software updates**
+after deploying this version of the frontend. From the frontend checkout run:
+
+```sh
+cd /apps/invidious-fe-js
+./prod.sh updates
+```
+
+This starts the frontend and a second Compose service named `updater`. Both
+restart with Docker. The updater runs entirely on the server and continues
+working while the frontend container is replaced. The command uses the owner
+of the frontend checkout's `.git` directory for the updater process and detects
+the group of the Docker socket. This user needs write access to both checkouts.
+The checkout remembers this choice for subsequent `./prod.sh start`, `stop`,
+and `update` commands. Run `./prod.sh updates` again after changing the
+updater configuration or its Dockerfile.
+
+The engine defaults to `../invidious` relative to the frontend checkout. To
+override it, set an absolute server path in the frontend's `.env`, for example
+`INVIDIOUS_ENGINE_DIR=/srv/video/invidious`. The updater mounts both checkouts
+at their original host paths so relative Compose volumes keep their existing data.
+Each project uses its own Compose file and `.env`. The expected services are
+`invidious-fe` in `compose.yaml` and `invidious` in `docker-compose.yml`.
+
+Everyone who can open the frontend can check versions and confirm an update.
+The displayed running revision comes from the live frontend container or the
+engine binary. The available revision comes from the checked-out branch's Git
+upstream. The server fast-forwards to the confirmed commit, builds the selected
+service, and waits for it to start. Updating the engine leaves PostgreSQL and
+Companion running. If local changes conflict, resolve them in the checkout and
+check again. If a build fails after Git advances, the UI shows the revision that
+is actually running and allows a retry. For build and startup output, run
+`docker compose --profile updates logs updater` in the frontend checkout.
+
+The frontend talks to the updater through a local Unix socket. Only the updater
+gets the Docker socket, which grants it control of the server's Docker daemon.
+Public GitHub SSH remotes are read over HTTPS by default. For a private SSH
+remote, create a dedicated deploy key on the server from the frontend checkout:
+
+```sh
+install -d -m 700 .git/updater-ssh
+ssh-keygen -t ed25519 -N '' -f .git/updater-ssh/id_ed25519
+```
+
+Register the public key with read access to the private repository. Place the
+Git host's verified SSH host keys in `.git/updater-ssh/known_hosts`. The updater
+uses that identity for SSH remotes. The SSH directory stays inside `.git`,
+which the frontend image excludes from its build context.
+
 ## Project Layout
 
 - `src/api.js` - Invidious API client and URL helpers.
